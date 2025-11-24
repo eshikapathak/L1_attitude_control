@@ -1,18 +1,15 @@
-%% Master Experiment Script: L1 Adaptive Control + LQR
-% Supports: LQR Baseline, Reference Tracking, Ts Sweep, Delay Sweep
+%% Master Experiment Script: L1 Adaptive Control + LQR + MRAC
 clear; clc; close all;
 
 %% ================= 1. GLOBAL INITIALIZATION =================
 model_name = 'l1_lqr'; 
 
 % --- Geometry & Physics ---
-P.m  = 0.76;      
-P.L  = 0.14;      
+P.m  = 0.76; P.L  = 0.14;      
 P.Ix = 0.0045; P.Iy = 0.0045; P.Iz = 0.0113;
 
 % --- Linear Model (FORCE BASED) ---
 P.A_true = [zeros(3,3), eye(3); zeros(3,6)];
-% Bm defined for inputs: [Force_Roll, Force_Pitch, Torque_Yaw]
 P.Bm = [zeros(3,3); 
         P.L/P.Ix,  0,        0;      
         0,         P.L/P.Iy, 0;       
@@ -21,285 +18,272 @@ P.Bum    = [eye(3); zeros(3,3)];
 P.Bbar   = [P.Bm P.Bum];  
 
 % --- Default Simulation Settings ---
-T_final     = 10;
-P.loop_delay = 0;         % Default: No delay
+T_final     = 20;
+P.loop_delay = 0;      
 P.ref_amp    = deg2rad(20); 
 P.ref_start  = 0.0;       
+P.use_mrac   = 0;         
 
-% --- Disturbance (Standard) ---
-P.dist_amp  = [1.0; 0.5; 0.2]; % Nm [Roll, Pitch, Yaw]
-P.dist_freq = [2.0; 1.5; 0.5]; % rad/s
+% --- Disturbance ---
+P.dist_amp  = [0.5; 0.5; 0.2]; 
+P.dist_freq = [1.0; 1.5; 1.0]; 
 
 % --- LQR Baseline Tuning ---
-% High gains enabled by Force-based Bm
-Q = diag([100, 100, 80, 1, 1, 1])/2; 
-R = diag([0.01, 0.01, 0.01])*10;    
+Q = diag([100, 100, 80, 1, 1, 1]); 
+R = diag([0.01, 0.01, 0.01]);
+% Q = diag([10, 10, 10,  4, 4, 3]);   % [phi theta psi dphi dtheta dpsi]
+% R = diag([2, 2, 2]);
 P.K = lqr(P.A_true, P.Bm, Q, R);
 
+% --- MRAC INITIALIZATION (Base) ---
+P.MRAC.Am = P.A_true - P.Bm * P.K;
+P.MRAC.Bm = P.Bm * P.K; 
+Q_lyap = diag([100 100 100 175 175 125]);
+% eye(6) * 50; 
+P.MRAC.P_lyap = lyap(P.MRAC.Am', Q_lyap);
+
+% Default Gains (Will be overwritten by Exp 5 logic)
+P.MRAC.Gam_x = 100; P.MRAC.Gam_r = 100; P.MRAC.Gam_w = 100; 
+P.MRAC.theta_x_max = 1.0; P.MRAC.theta_r_max = 1.0; P.MRAC.theta_w_max = 100.0;
+
 % --- L1 Adaptive Defaults ---
-P.Ts = 0.002;              % 2ms default
-P.Ae = -10.0 * eye(6);      
+P.Ts = 0.002;              
+P.Ae = -1.0 * eye(6);      
 P.wc = 40;                 
 [P.Alpf, P.Blpf, P.Clpf, P.Dlpf] = deal(-P.wc*eye(3), P.wc*eye(3), eye(3), zeros(3));
-
-% Function to update L1 Matrices (Must call this if Ts changes)
-update_L1 = @(p) struct('Phi_inv', inv((expm(p.Ae*p.Ts) - eye(6))/p.Ae), ...
-                        'Exp_AeTs', expm(p.Ae*p.Ts));
-
-% Initialize L1 matrices once
+update_L1 = @(p) struct('Phi_inv', inv((expm(p.Ae*p.Ts) - eye(6))/p.Ae), 'Exp_AeTs', expm(p.Ae*p.Ts));
 L1_Mats = update_L1(P);
 P.Phi_inv = L1_Mats.Phi_inv;
 P.Exp_AeTs = L1_Mats.Exp_AeTs;
 
-fprintf('Standard Parameters Loaded.\n');
+fprintf('Parameters Loaded.\n');
 fprintf('--------------------------------------------------\n');
 fprintf('SELECT EXPERIMENT:\n');
-fprintf('  1. LQR Baseline vs L1+LQR (Disturbance Rejection)\n');
-fprintf('  2. Reference Tracking Performance (Varying Amplitude)\n');
+fprintf('  1. LQR vs L1+LQR (Disturbance Rejection)\n');
+fprintf('  2. Reference Tracking Performance\n');
 fprintf('  3. Effect of Sampling Time (Ts Sweep)\n');
 fprintf('  4. Robustness to Time Delay (Delay Sweep)\n');
+fprintf('  5. MRAC Performance vs L1 (With Gain Tuning)\n');
 fprintf('--------------------------------------------------\n');
-choice = input('Enter choice (1-4): ');
-
+choice = input('Enter choice (1-5): ');
 if isempty(choice), choice = 1; end
 
 %% ================= 2. EXPERIMENT LOGIC =================
 
 switch choice
-    
     case 1 % --- LQR vs L1 ---
-        fprintf('Running Exp 1: LQR vs L1+LQR...\n');
+        P.use_mrac = 0; 
         
-        % Run 1: LQR Only (Disable L1 by zeroing Filter Output)
-        P_lqr = P;
-        P_lqr.Clpf = zeros(3); % L1 control signal becomes 0
+        P_lqr = P; P_lqr.Clpf = zeros(3); 
         assignin('base', 'P', P_lqr);
-        try
-            out1 = sim(model_name, 'StopTime', num2str(T_final));
-            res_lqr = extract_sim_data(out1, P_lqr);
-        catch ME
-             fprintf('\nERROR during Run 1 (LQR Only).\n');
-             rethrow(ME);
-        end
-
-        % Run 2: L1 + LQR (Enable L1)
-        P_l1 = P;
-        P_l1.Clpf = eye(3); % Normal L1
+        out1 = sim(model_name, 'StopTime', num2str(T_final));
+        res_lqr = extract_sim_data(out1, P_lqr);
+        
+        P_l1 = P; P_l1.Clpf = eye(3); 
         assignin('base', 'P', P_l1);
-        try
-            out2 = sim(model_name, 'StopTime', num2str(T_final));
-            res_l1 = extract_sim_data(out2, P_l1);
-        catch ME
-             fprintf('\nERROR during Run 2 (L1 + LQR).\n');
-             rethrow(ME);
-        end
+        out2 = sim(model_name, 'StopTime', num2str(T_final));
+        res_l1 = extract_sim_data(out2, P_l1);
         
-        % Plot Comparison
         plot_compare_runs(res_lqr, res_l1, 'LQR Only', 'L1 + LQR');
-        
+
     case 2 % --- Reference Tracking ---
-        fprintf('Running Exp 2: Reference Tracking...\n');
+        P.use_mrac = 0;
         amps_deg = [10, 30, 60];
-        results = {};
         
-        % Setup Subplots for Tracking AND Torque
-        fig_handle = figure('Color','w','Name','Reference Tracking', 'Position', [100, 100, 800, 600]);
-        
-        ax1 = subplot(2,1,1); hold on; grid on; 
-        title('Roll Response', 'Interpreter', 'latex', 'FontSize', 14); 
-        ylabel('Roll $\phi$ (deg)', 'Interpreter', 'latex', 'FontSize', 12);
-        
-        ax2 = subplot(2,1,2); hold on; grid on; 
-        title('Control Torque $\tau_\phi$ (Total)', 'Interpreter', 'latex', 'FontSize', 14); 
-        ylabel('Torque (Nm)', 'Interpreter', 'latex', 'FontSize', 12); 
-        xlabel('Time (s)', 'Interpreter', 'latex', 'FontSize', 12);
-        
-        colors = {'b', 'g', 'r'};
+        figure('Color','w','Name','Tracking');
+        ax1 = subplot(2,1,1); hold on; grid on; title('Roll Response', 'FontSize', 14); ylabel('Deg');
+        ax2 = subplot(2,1,2); hold on; grid on; title('Torque', 'FontSize', 14); ylabel('Nm');
+        colors = {'b', [0.85 0.33 0.10], [0.49 0.18 0.56]}; 
         
         for i = 1:length(amps_deg)
             P.ref_amp = deg2rad(amps_deg(i));
             assignin('base', 'P', P);
-            
             out = sim(model_name, 'StopTime', num2str(T_final));
             res = extract_sim_data(out, P);
-            
-            % Plot Angle on Top
-            plot(ax1, res.t, rad2deg(res.x(:,1)), 'LineWidth', 2, 'Color', colors{i}, ...
-                'DisplayName', sprintf('Ref = %d deg', amps_deg(i)));
-            plot(ax1, res.t, rad2deg(res.ref(:,1)), '--', 'Color', colors{i}, 'HandleVisibility','off');
-            
-            % Plot Torque on Bottom
-            plot(ax2, res.t, res.tau_tot(:,1), 'LineWidth', 1.5, 'Color', colors{i}, ...
-                'DisplayName', sprintf('Ref %d deg', amps_deg(i)));
+            plot(ax1, res.t, rad2deg(res.x(:,1)), 'Color', colors{i}, 'LineWidth', 2);
+            plot(ax1, res.t, rad2deg(res.ref(:,1)), '--', 'Color', colors{i}, 'LineWidth', 1.5);
+            plot(ax2, res.t, res.tau_tot(:,1), 'Color', colors{i}, 'LineWidth', 2);
         end
-        legend(ax1, 'Location', 'best', 'Interpreter', 'latex');
-        legend(ax2, 'Location', 'best', 'Interpreter', 'latex');
-        
+        legend(ax1, 'Ref=10', 'Ref=10', 'Ref=30', 'Ref=30', 'Ref=60', 'Ref=60');
+
     case 3 % --- Ts Sweep ---
-        fprintf('Running Exp 3: Ts Sweep...\n');
-        Ts_vals = [0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05];
+        fprintf('Running Ts Sweep...\n');
+        Ts_vals = [0.0005, 0.001, 0.002, 0.005, 0.01];
         rmse_log = [];
-        
         for i = 1:length(Ts_vals)
             P.Ts = Ts_vals(i);
-            
-            % CRITICAL: Recompute L1 Matrices for new Ts
-            mats = update_L1(P);
-            P.Phi_inv = mats.Phi_inv;
-            P.Exp_AeTs = mats.Exp_AeTs;
-            
+            mats = update_L1(P); P.Phi_inv=mats.Phi_inv; P.Exp_AeTs=mats.Exp_AeTs;
             assignin('base', 'P', P);
-            fprintf('  Testing Ts = %.4f s ... ', P.Ts);
-            
-            try
-                out = sim(model_name, 'StopTime', num2str(T_final));
-                res = extract_sim_data(out, P);
-                
-                err = res.ref(:,1) - res.x(:,1);
-                % RMSE in DEGREES
-                rmse_rad = sqrt(mean(err.^2));
-                rmse_deg = rad2deg(rmse_rad);
-                
-                if rmse_deg > 500, rmse_deg = NaN; end % Filter instability
-                fprintf('RMSE: %.4f deg\n', rmse_deg);
-            catch
-                rmse_deg = NaN; fprintf('Failed.\n');
-            end
-            rmse_log(i) = rmse_deg;
+            out = sim(model_name, 'StopTime', num2str(T_final));
+            res = extract_sim_data(out, P);
+            err = res.ref(:,1) - res.x(:,1);
+            rmse_log(i) = rad2deg(sqrt(mean(err.^2)));
+            fprintf('Ts=%.4f, RMSE=%.4f deg\n', P.Ts, rmse_log(i));
         end
-        
-        figure('Color','w','Name','Ts Sweep');
-        semilogx(Ts_vals, rmse_log, '-bo', 'LineWidth',2, 'MarkerFaceColor','b');
-        set(gca, 'XDir', 'reverse'); % <--- FLIP X-AXIS HERE
-        grid on; 
-        xlabel('Sampling Time $T_s$ (s) [Decreasing $\rightarrow$]', 'Interpreter', 'latex', 'FontSize', 12); 
-        ylabel('RMSE (deg)', 'Interpreter', 'latex', 'FontSize', 12);
-        title('Effect of Sampling Rate on Tracking Accuracy', 'Interpreter', 'latex', 'FontSize', 14);
-        
+        figure; semilogx(Ts_vals, rmse_log, '-o', 'LineWidth', 2, 'Color', 'b', 'MarkerFaceColor', 'b'); 
+        set(gca, 'XDir', 'reverse');
+        xlabel('Ts (s)'); ylabel('RMSE (deg)'); title('Ts Sweep');
+
     case 4 % --- Delay Sweep ---
-        fprintf('Running Exp 4: Time Delay Sweep...\n');
-        
-        % === MODIFIED DELAY SWEEP ===
-        % Testing smaller increments to find exact failure point
-        delays = [0, 0.001, 0.002, 0.003, 0.004, 0.005, 0.006, 0.008, 0.010];
+        fprintf('Running Delay Sweep...\n');
+        delays = [0, 0.002, 0.004, 0.006, 0.008, 0.010];
         rmse_log = [];
-        
         for i = 1:length(delays)
             P.loop_delay = delays(i);
             assignin('base', 'P', P);
-            fprintf('  Testing Delay = %.3f s ... ', P.loop_delay);
-            
             try
                 out = sim(model_name, 'StopTime', num2str(T_final));
                 res = extract_sim_data(out, P);
-                
                 err = res.ref(:,1) - res.x(:,1);
-                % RMSE in DEGREES
-                rmse_rad = sqrt(mean(err.^2));
-                rmse_deg = rad2deg(rmse_rad);
-                
-                if rmse_deg > 1000, rmse_deg = NaN; end % Unstable
-                fprintf('RMSE: %.4f deg\n', rmse_deg);
-            catch ME
-                rmse_deg = NaN; 
-                fprintf('Unstable (Crashed).\n');
-                % We catch the crash so the script continues to plot valid points
+                val = rad2deg(sqrt(mean(err.^2)));
+                if val > 1000, val=NaN; end
+            catch
+                val = NaN;
             end
-            rmse_log(i) = rmse_deg;
+            rmse_log(i) = val;
+            fprintf('Delay=%.3f, RMSE=%.4f deg\n', P.loop_delay, val);
+        end
+        figure; plot(delays*1000, rmse_log, '-o', 'LineWidth', 2, 'Color', 'r', 'MarkerFaceColor', 'r'); 
+        xlabel('Delay (ms)'); ylabel('RMSE (deg)'); title('Delay Sweep');
+
+    case 5 % --- MRAC vs L1 ---
+        fprintf('Choose MRAC Learning Mode:\n');
+        fprintf('  1: Conservative (Gamma = 2.0) -> Smooth Control\n');
+        fprintf('  2: Aggressive (Gamma = 10) -> High Freq Oscillations (Slide 11)\n');
+        mrac_mode = input('Choice (1/2): ');
+        
+        if mrac_mode == 2
+            P.MRAC.Gam_x = 10.0; P.MRAC.Gam_r = 10.0; P.MRAC.Gam_w = 10.0;
+            P.MRAC.theta_x_max = 5.0; % Relax bounds for high gain
+            fprintf('>> Running AGGRESSIVE MRAC (Expect Oscillations)...\n');
+        else
+            % P.MRAC.Gam_x = 2.0; P.MRAC.Gam_r = 2.0; P.MRAC.Gam_w = 5.0;
+            fprintf('>> Running CONSERVATIVE MRAC (Smooth)...\n');
         end
         
-        figure('Color','w','Name','Delay Sweep');
-        plot(delays*1000, rmse_log, '-ro', 'LineWidth',2, 'MarkerFaceColor','r');
-        grid on; 
-        xlabel('Loop Delay (ms)', 'Interpreter', 'latex', 'FontSize', 12); 
-        ylabel('RMSE (deg)', 'Interpreter', 'latex', 'FontSize', 12);
-        title('Performance Degradation vs Time Delay', 'Interpreter', 'latex', 'FontSize', 14);
+        % Run 1: L1 Adaptive (Always same reference)
+        P_l1 = P; P_l1.use_mrac = 0; P_l1.Clpf = eye(3);
+        assignin('base', 'P', P_l1);
+        try
+            out1 = sim(model_name, 'StopTime', num2str(T_final));
+            res_l1 = extract_sim_data(out1, P_l1);
+        catch ME
+            disp('L1 Simulation Crashed!'); rethrow(ME);
+        end
+        
+        % Run 2: MRAC (With chosen gains)
+        P_mrac = P; P_mrac.use_mrac = 1; 
+        assignin('base', 'P', P_mrac);
+        try
+            out2 = sim(model_name, 'StopTime', num2str(T_final));
+            res_mrac = extract_sim_data(out2, P_mrac);
+        catch ME
+            disp('MRAC Simulation Crashed!'); rethrow(ME);
+        end
+        
+        % Plot
+        plot_compare_runs(res_l1, res_mrac, 'L1 Adaptive', 'MRAC');
+        
+    otherwise
+        fprintf('Selected experiment logic is in previous versions.\n');
 end
 
 %% ================= 3. HELPER FUNCTIONS =================
-
 function res = extract_sim_data(out, P)
-    % Helper Function to Extract & Fix Data Orientation
-    % This ensures data is always (Time x Channels)
-    function data_fixed = fix_data(sim_data, t)
-        d = squeeze(sim_data); % Remove singleton dims
-        
-        % If dimensions match Time length in the first dim, it's already correct
-        if size(d, 1) == length(t)
+    function data_fixed = fix_dim_robust(sim_data, t)
+        d = squeeze(sim_data);
+        if size(d,1) == length(t)
             data_fixed = d;
-        % If the second dim matches Time, we need to transpose
-        elseif size(d, 2) == length(t)
+        elseif size(d,2) == length(t)
             data_fixed = d.';
         else
-            error('Data dimension does not match time vector length!');
+            error('Dimension mismatch. Length T=%d, Data size=%d', length(t), size(d,1));
         end
     end
 
     try
-        % We first attempt to retrieve variables to trigger error if missing
-        check_x = out.sim_x; 
-        
         res.t = out.sim_x.Time;
+        res.x = fix_dim_robust(out.sim_x.Data, res.t);
+        res.ref = fix_dim_robust(out.sim_ref.Data, res.t);
+        res.dist = fix_dim_robust(out.sim_dist.Data, res.t);
         
-        % Apply the fix function to each signal
-        res.x      = fix_data(out.sim_x.Data, res.t);       
-        res.ref    = fix_data(out.sim_ref.Data, res.t);     
-        res.u_b    = fix_data(out.sim_u_base.Data, res.t);  
-        res.u_l1   = fix_data(out.sim_u_L1.Data, res.t);    
-        res.dist   = fix_data(out.sim_dist.Data, res.t);    
-        
-        % Optional: Sigma
-        if isfield(out, 'sim_sigma')
-             res.sigma = fix_data(out.sim_sigma.Data, res.t);
+        % LQR/L1 Signals
+        try
+            res.u_b = fix_dim_robust(out.sim_u_base.Data, res.t);
+            res.tau_b  = [res.u_b(:,1)*P.L,  res.u_b(:,2)*P.L,  res.u_b(:,3)];
+        catch
+            res.tau_b = zeros(length(res.t), 3);
         end
         
-        % Calculate Torques (Nm)
-        res.tau_b  = [res.u_b(:,1)*P.L,  res.u_b(:,2)*P.L,  res.u_b(:,3)];
-        res.tau_l1 = [res.u_l1(:,1)*P.L, res.u_l1(:,2)*P.L, res.u_l1(:,3)];
-        res.tau_tot = res.tau_b + res.tau_l1;
+        try
+            res.u_l1 = fix_dim_robust(out.sim_u_L1.Data, res.t);
+            res.tau_l1 = [res.u_l1(:,1)*P.L, res.u_l1(:,2)*P.L, res.u_l1(:,3)];
+        catch
+            res.tau_l1 = zeros(length(res.t), 3);
+        end
+
+        % MRAC Signals
+        res.tau_mrac = zeros(length(res.t), 3);
+        
+        if isfield(P, 'use_mrac') && P.use_mrac == 1
+            try 
+                 u_mrac_raw = fix_dim_robust(out.sim_u_mrac.Data, res.t);
+                 res.tau_mrac = [u_mrac_raw(:,1)*P.L, u_mrac_raw(:,2)*P.L, u_mrac_raw(:,3)];
+                 
+                 if max(abs(res.tau_mrac(:,1))) < 1e-6 && max(abs(res.tau_b(:,1))) > 1e-6
+                     fprintf('WARNING: sim_u_mrac is 0, but sim_u_base has data. Using base as fallback.\n');
+                     res.tau_mrac = res.tau_b;
+                 end
+            catch
+                fprintf('\n!!! WARNING: sim_u_mrac NOT FOUND !!!\n');
+                if max(abs(res.tau_b(:,1))) > 1e-6
+                    res.tau_mrac = res.tau_b;
+                end
+            end
+            res.tau_tot = res.tau_mrac;
+            fprintf('MRAC Mode: Max Torque = %.4f Nm\n', max(abs(res.tau_tot(:,1))));
+        else
+            res.tau_tot = res.tau_b + res.tau_l1;
+        end
         
     catch ME
         fprintf('\n!!! DATA EXTRACTION FAILED !!!\n');
-        fprintf('The script could not find the required variables in "out".\n');
-        fprintf('Current variables in "out" are:\n');
         disp(out);
-        fprintf('Please rename your "To Workspace" blocks in Simulink to match: sim_x, sim_ref, sim_u_base, sim_u_L1, sim_dist\n');
         rethrow(ME);
     end
 end
 
 function plot_compare_runs(res1, res2, name1, name2)
     fig_size = [100, 100, 1000, 800];
-    figure('Color','w','Name','LQR vs L1', 'Position', fig_size);
+    figure('Color','w','Name',[name1 ' vs ' name2], 'Position', fig_size);
     
-    % 1. Tracking
+    c1 = [0.85 0.33 0.10]; % Dark Orange (L1)
+    c2 = [0 0.45 0.74];    % Standard Blue (MRAC)
+    
+    % 1. TRACKING
     subplot(3,1,1); hold on; grid on;
-    plot(res1.t, rad2deg(res1.x(:,1)), 'g--', 'LineWidth', 2, 'DisplayName', name1);
-    plot(res2.t, rad2deg(res2.x(:,1)), 'b-', 'LineWidth', 1.5, 'DisplayName', name2);
-    plot(res1.t, rad2deg(res1.ref(:,1)), 'k--', 'DisplayName', 'Ref');
-    ylabel('Roll $\phi$ (deg)', 'Interpreter', 'latex', 'FontSize', 12); 
-    title('Attitude Tracking Comparison', 'Interpreter', 'latex', 'FontSize', 14); 
-    legend('Location','best', 'Interpreter', 'latex');
+    plot(res1.t, rad2deg(res1.x(:,1)), '--', 'Color', c1, 'LineWidth', 2, 'DisplayName', name1);
+    plot(res2.t, rad2deg(res2.x(:,1)), '-', 'Color', c2, 'LineWidth', 2, 'DisplayName', name2);
+    plot(res1.t, rad2deg(res1.ref(:,1)), 'k--', 'LineWidth', 1.5, 'DisplayName', 'Ref');
+    ylabel('Roll (deg)', 'FontSize', 12); title('Tracking Comparison', 'FontSize', 14); legend('Location','best');
     
-    % 2. Total Torque & Breakdown (The 4 Lines you requested)
+    % 2. CONTROL EFFORT (Including L1 breakdown)
     subplot(3,1,2); hold on; grid on;
-    plot(res1.t, res1.tau_tot(:,1), 'g--', 'LineWidth', 2, 'DisplayName', [name1 ' Total']); % 1. LQR Total
-    plot(res2.t, res2.tau_tot(:,1), 'b-', 'LineWidth', 1.5, 'DisplayName', [name2 ' Total']); % 2. L1 Total
-    plot(res2.t, res2.tau_l1(:,1), 'r-.', 'LineWidth', 1.0, 'DisplayName', [name2 ' Adaptive']); % 3. L1 Adaptive Component
-    plot(res1.t, res1.dist(:,1), 'm:', 'LineWidth', 2, 'DisplayName', 'Disturbance'); % 4. Disturbance
+    % L1 Total
+    plot(res1.t, res1.tau_tot(:,1), '--', 'Color', c1, 'LineWidth', 2, 'DisplayName', [name1 ' Total']);
+    % L1 Base (Visual aid)
+    if isfield(res1, 'tau_b')
+        plot(res1.t, res1.tau_b(:,1), ':', 'Color', c1, 'LineWidth', 1.0, 'DisplayName', [name1 ' Base Only']);
+    end
+    % MRAC
+    plot(res2.t, res2.tau_tot(:,1), '-', 'Color', c2, 'LineWidth', 2, 'DisplayName', name2);
+    % Disturbance
+    plot(res1.t, res1.dist(:,1), 'm:', 'LineWidth', 2, 'DisplayName', 'Disturbance');
+    ylabel('Torque (Nm)', 'FontSize', 12); title('Control Effort Breakdown', 'FontSize', 14); legend('Location','best');
     
-    ylabel('$\tau_\phi$ (Nm)', 'Interpreter', 'latex', 'FontSize', 12); 
-    title('Control Effort Breakdown', 'Interpreter', 'latex', 'FontSize', 14); 
-    legend('Location','best', 'Interpreter', 'latex');
-    
-    % 3. Error (Converted to Degrees)
+    % 3. ERROR
     subplot(3,1,3); hold on; grid on;
-    err1 = abs(res1.ref(:,1) - res1.x(:,1));
-    err2 = abs(res2.ref(:,1) - res2.x(:,1));
-    plot(res1.t, rad2deg(err1), 'g--', 'LineWidth', 1.5, 'DisplayName', [name1 ' Error']);
-    plot(res2.t, rad2deg(err2), 'b-', 'LineWidth', 1.5, 'DisplayName', [name2 ' Error']);
-    ylabel('$|$Error$|$ (deg)', 'Interpreter', 'latex', 'FontSize', 12); 
-    xlabel('Time (s)', 'Interpreter', 'latex', 'FontSize', 12); 
-    title('Absolute Tracking Error', 'Interpreter', 'latex', 'FontSize', 14); 
-    legend('Location','best', 'Interpreter', 'latex');
+    plot(res1.t, rad2deg(abs(res1.ref(:,1)-res1.x(:,1))), '--', 'Color', c1, 'LineWidth', 2, 'DisplayName', name1);
+    plot(res2.t, rad2deg(abs(res2.ref(:,1)-res2.x(:,1))), '-', 'Color', c2, 'LineWidth', 2, 'DisplayName', name2);
+    ylabel('|Error| (deg)', 'FontSize', 12); title('Error', 'FontSize', 14); legend('Location','best');
 end
