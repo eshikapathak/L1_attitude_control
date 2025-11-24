@@ -19,7 +19,7 @@ P.Bbar   = [P.Bm P.Bum];
 
 % --- Default Simulation Settings ---
 T_final     = 10;
-P.loop_delay = 1e-5;      
+P.loop_delay = 1e-7;      
 P.ref_amp    = deg2rad(30); 
 P.ref_start  = 0.0; 
 P.ref_type   = 0;         % 0=Step, 1=Sine
@@ -99,7 +99,7 @@ switch choice
         P_run = P; P_run.use_mrac = 1; assignin('base', 'P', P_run);
         res_mrac = run_sim(model_name, T_final, P_run);
         
-        plot_3way_comparison(res_lqr, res_l1, res_mrac, 'Disturbance Rejection (Ref=0)');
+        plot_3way_comparison(res_lqr, res_l1, res_mrac, '');
 
     case 2 % --- EXP 2: TRACKING PERFORMANCE (3-Way x 3 Refs) ---
         fprintf('Running Exp 2: Tracking Performance (Single Figure)...\n');
@@ -150,7 +150,7 @@ switch choice
             
             title(['\textbf{' c.name '}'], 'Interpreter', 'latex', 'FontSize', 12);
             if i==1, ylabel('$\phi$ (deg)', 'Interpreter', 'latex'); end
-            if i==3, legend('LQR','L1','MRAC','Ref', 'Location','best','Interpreter','latex'); end
+            if i==3, legend('LQR','L1+LQR','MRAC','Ref', 'Location','best','Interpreter','latex'); end
             
             % 2. Torque (Row 2, Col i) -> Index is i + num_cases
             nexttile(i + num_cases); hold on; grid on;
@@ -165,7 +165,7 @@ switch choice
 
     case 3 % --- Ts Sweep ---
         fprintf('Running Ts Sweep...\n');
-        Ts_vals = [0.0005, 0.001, 0.002, 0.005, 0.01];
+        Ts_vals = [5e-5, 0.0001, 0.0005, 0.001, 0.002, 0.005, 0.01, 0.1, 1.0];
         rmse_log = [];
         for i = 1:length(Ts_vals)
             P.Ts = Ts_vals(i);
@@ -178,7 +178,7 @@ switch choice
             fprintf('Ts=%.4f, RMSE=%.4f deg\n', P.Ts, rmse_log(i));
         end
         figure('Color','w','Position',[100 100 800 600]);
-        semilogx(Ts_vals, rmse_log, '-o', 'LineWidth', 2, 'Color', 'b', 'MarkerFaceColor', 'b'); 
+        semilogx(Ts_vals, rmse_log, '-o', 'LineWidth', 2, 'Color', [0.49 0.18 0.56], 'MarkerFaceColor', [0.49 0.18 0.56]); 
         set(gca, 'XDir', 'reverse', 'TickLabelInterpreter', 'latex', 'FontSize', 12);
         xlabel('Sampling Time $T_s$ (s)', 'Interpreter', 'latex'); 
         ylabel('RMSE (deg)', 'Interpreter', 'latex'); 
@@ -269,49 +269,92 @@ function res = extract_sim_data(out, P)
     end
 end
 
+% function plot_3way_comparison(r1, r2, r3, title_str)
+%     % r1=LQR, r2=L1, r3=MRAC
+% 
+%     % Standard Landscape Figure
+%     fig_size = [100, 100, 1000, 800];
+%     figure('Color','w', 'Position', fig_size);
+% 
+%     % Colors
+%     cLQR  = [0.4 0.4 0.4];    % Grey
+%     cL1   = [0.85 0.33 0.10]; % Orange
+%     cMRAC = [0 0.45 0.74];    % Blue
+% 
+%     % --- 1. Tracking ---
+%     subplot(2,1,1); hold on; grid on;
+%     if ~isempty(r1), plot(r1.t, rad2deg(r1.x(:,1)), '--', 'Color', cLQR, 'LineWidth', 1.5, 'DisplayName', 'LQR'); end
+%     if ~isempty(r2), plot(r2.t, rad2deg(r2.x(:,1)), '-.', 'Color', cL1, 'LineWidth', 2, 'DisplayName', 'L1+LQR'); end
+%     if ~isempty(r3), plot(r3.t, rad2deg(r3.x(:,1)), '-', 'Color', cMRAC, 'LineWidth', 2, 'DisplayName', 'MRAC'); end
+% 
+%     % Ref
+%     if ~isempty(r1), plot(r1.t, rad2deg(r1.ref(:,1)), 'k:', 'LineWidth', 1.5, 'DisplayName', 'Ref'); 
+%     elseif ~isempty(r2), plot(r2.t, rad2deg(r2.ref(:,1)), 'k:', 'LineWidth', 1.5, 'DisplayName', 'Ref'); end
+% 
+%     ylabel('$\phi$ (deg)', 'Interpreter', 'latex', 'FontSize', 12);
+%     title(title_str, 'Interpreter', 'latex', 'FontSize', 14);
+%     legend('Location','best', 'Interpreter', 'latex');
+% 
+%     % --- 2. Torque ---
+%     subplot(2,2,1); hold on; grid on;
+%     if ~isempty(r1), plot(r1.t, r1.tau_tot(:,1), '--', 'Color', cLQR, 'LineWidth', 1.5); end
+%     if ~isempty(r2), plot(r2.t, r2.tau_tot(:,1), '-.', 'Color', cL1, 'LineWidth', 2); end
+%     if ~isempty(r3), plot(r3.t, r3.tau_tot(:,1), '-', 'Color', cMRAC, 'LineWidth', 2); end
+%     if ~isempty(r1), plot(r1.t, r1.dist(:,1), 'm:', 'LineWidth', 1, 'DisplayName', 'Dist'); end
+% 
+%     ylabel('$\tau$ (Nm)', 'Interpreter', 'latex', 'FontSize', 12);
+%     title('Control Effort', 'Interpreter', 'latex', 'FontSize', 14);
+% 
+%     % % --- 3. Error ---
+%     % subplot(3,1,3); hold on; grid on;
+%     % if ~isempty(r1), plot(r1.t, rad2deg(abs(r1.ref(:,1)-r1.x(:,1))), '--', 'Color', cLQR, 'LineWidth', 1.5); end
+%     % if ~isempty(r2), plot(r2.t, rad2deg(abs(r2.ref(:,1)-r2.x(:,1))), '-.', 'Color', cL1, 'LineWidth', 2); end
+%     % if ~isempty(r3), plot(r3.t, rad2deg(abs(r3.ref(:,1)-r3.x(:,1))), '-', 'Color', cMRAC, 'LineWidth', 2); end
+%     % 
+%     % ylabel('$|e|$ (deg)', 'Interpreter', 'latex', 'FontSize', 12);
+%     % xlabel('Time (s)', 'Interpreter', 'latex', 'FontSize', 12);
+%     % title('Tracking Error', 'Interpreter', 'latex', 'FontSize', 14);
+% end
 function plot_3way_comparison(r1, r2, r3, title_str)
     % r1=LQR, r2=L1, r3=MRAC
-    
-    % Standard Landscape Figure
-    fig_size = [100, 100, 1000, 800];
+
+    % Define figure size: wider but balanced
+    fig_size = [100, 100, 1100, 450];
     figure('Color','w', 'Position', fig_size);
-    
-    % Colors
+
+    % Create a 1x2 tiled layout
+    tl = tiledlayout(1,2, 'TileSpacing', 'compact', 'Padding', 'compact');
+    title(tl, title_str, 'Interpreter','latex', 'FontSize',16);
+
+    % Colors for plots
     cLQR  = [0.4 0.4 0.4];    % Grey
     cL1   = [0.85 0.33 0.10]; % Orange
     cMRAC = [0 0.45 0.74];    % Blue
-    
-    % --- 1. Tracking ---
-    subplot(3,1,1); hold on; grid on;
+    % cMRAC = [0 0.7 0];        % Green
+
+
+    % --- Left: Tracking (angles) ---
+    nexttile(1); hold on; grid on;
     if ~isempty(r1), plot(r1.t, rad2deg(r1.x(:,1)), '--', 'Color', cLQR, 'LineWidth', 1.5, 'DisplayName', 'LQR'); end
     if ~isempty(r2), plot(r2.t, rad2deg(r2.x(:,1)), '-.', 'Color', cL1, 'LineWidth', 2, 'DisplayName', 'L1+LQR'); end
     if ~isempty(r3), plot(r3.t, rad2deg(r3.x(:,1)), '-', 'Color', cMRAC, 'LineWidth', 2, 'DisplayName', 'MRAC'); end
-    
-    % Ref
-    if ~isempty(r1), plot(r1.t, rad2deg(r1.ref(:,1)), 'k:', 'LineWidth', 1.5, 'DisplayName', 'Ref'); 
-    elseif ~isempty(r2), plot(r2.t, rad2deg(r2.ref(:,1)), 'k:', 'LineWidth', 1.5, 'DisplayName', 'Ref'); end
-    
-    ylabel('$\phi$ (deg)', 'Interpreter', 'latex', 'FontSize', 12);
-    title(title_str, 'Interpreter', 'latex', 'FontSize', 14);
-    legend('Location','best', 'Interpreter', 'latex');
-    
-    % --- 2. Torque ---
-    subplot(3,1,2); hold on; grid on;
-    if ~isempty(r1), plot(r1.t, r1.tau_tot(:,1), '--', 'Color', cLQR, 'LineWidth', 1.5); end
-    if ~isempty(r2), plot(r2.t, r2.tau_tot(:,1), '-.', 'Color', cL1, 'LineWidth', 2); end
-    if ~isempty(r3), plot(r3.t, r3.tau_tot(:,1), '-', 'Color', cMRAC, 'LineWidth', 2); end
+    % Reference line
+    if ~isempty(r1), plot(r1.t, rad2deg(r1.ref(:,1)), 'k:', 'LineWidth', 1.5, 'DisplayName', 'Ref'); end
+
+    ylabel('$\phi$ (deg)', 'Interpreter','latex', 'FontSize', 12);
+    xlabel('Time (s)', 'Interpreter','latex', 'FontSize', 12);
+    title('Tracking Angle', 'Interpreter','latex', 'FontSize', 14);
+    legend('Location','best', 'Interpreter','latex');
+
+    % --- Right: Control Effort ---
+    nexttile(2); hold on; grid on;
+    if ~isempty(r1), plot(r1.t, r1.tau_tot(:,1), '--', 'Color', cLQR, 'LineWidth', 1.5, 'DisplayName', 'LQR'); end
+    if ~isempty(r2), plot(r2.t, r2.tau_tot(:,1), '-.', 'Color', cL1, 'LineWidth', 2, 'DisplayName', 'L1+LQR'); end
+    if ~isempty(r3), plot(r3.t, r3.tau_tot(:,1), '-', 'Color', cMRAC, 'LineWidth', 2, 'DisplayName', 'MRAC'); end
     if ~isempty(r1), plot(r1.t, r1.dist(:,1), 'm:', 'LineWidth', 1, 'DisplayName', 'Dist'); end
-    
-    ylabel('$\tau$ (Nm)', 'Interpreter', 'latex', 'FontSize', 12);
-    title('Control Effort', 'Interpreter', 'latex', 'FontSize', 14);
-    
-    % --- 3. Error ---
-    subplot(3,1,3); hold on; grid on;
-    if ~isempty(r1), plot(r1.t, rad2deg(abs(r1.ref(:,1)-r1.x(:,1))), '--', 'Color', cLQR, 'LineWidth', 1.5); end
-    if ~isempty(r2), plot(r2.t, rad2deg(abs(r2.ref(:,1)-r2.x(:,1))), '-.', 'Color', cL1, 'LineWidth', 2); end
-    if ~isempty(r3), plot(r3.t, rad2deg(abs(r3.ref(:,1)-r3.x(:,1))), '-', 'Color', cMRAC, 'LineWidth', 2); end
-    
-    ylabel('$|e|$ (deg)', 'Interpreter', 'latex', 'FontSize', 12);
-    xlabel('Time (s)', 'Interpreter', 'latex', 'FontSize', 12);
-    title('Tracking Error', 'Interpreter', 'latex', 'FontSize', 14);
+
+    ylabel('$\tau$ (Nm)', 'Interpreter','latex', 'FontSize', 12);
+    xlabel('Time (s)', 'Interpreter','latex', 'FontSize', 12);
+    title('Control Effort', 'Interpreter','latex', 'FontSize', 14);
+    legend('Location','best', 'Interpreter','latex');
 end
