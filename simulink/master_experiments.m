@@ -1,13 +1,10 @@
 %% Master Experiment Script: L1 Adaptive Control + LQR + MRAC
 clear; clc; close all;
-
 %% ================= 1. GLOBAL INITIALIZATION =================
 model_name = 'l1_lqr'; 
-
 % --- Geometry & Physics ---
 P.m  = 0.76; P.L  = 0.14;      
 P.Ix = 0.0045; P.Iy = 0.0045; P.Iz = 0.0113;
-
 % --- Linear Model (FORCE BASED) ---
 P.A_true = [zeros(3,3), eye(3); zeros(3,6)];
 P.Bm = [zeros(3,3); 
@@ -16,7 +13,6 @@ P.Bm = [zeros(3,3);
         0,         0,        1/P.Iz]; 
 P.Bum    = [eye(3); zeros(3,3)];                         
 P.Bbar   = [P.Bm P.Bum];  
-
 % --- Default Simulation Settings ---
 T_final     = 10;
 P.loop_delay = 1e-7;      
@@ -24,37 +20,24 @@ P.ref_amp    = deg2rad(30);
 P.ref_start  = 0.0; 
 P.ref_type   = 0;         % 0=Step, 1=Sine
 P.use_mrac   = 0;         
-
 % --- Disturbance ---
 P.dist_amp  = [1.0; 0.5; 0.2]; 
 P.dist_freq = [2.0; 1.5; 0.5]; 
-
 % --- LQR Baseline Tuning ---
 Q = diag([100, 100, 80, 1, 1, 1]); 
 R = diag([0.01, 0.01, 0.01]);    
 P.K = lqr(P.A_true, P.Bm, Q, R);
-
-% --- MRAC INITIALIZATION ---
-% P.MRAC.Am = P.A_true - P.Bm * P.K;
-% P.MRAC.Bm = P.Bm * P.K; 
-% Q_lyap = eye(6) * 50; 
-% P.MRAC.P_lyap = lyap(P.MRAC.Am', Q_lyap);
 % --- MRAC INITIALIZATION ---
 Q_att = diag([100, 100, 80, 1, 1, 1]);   % [phi theta psi dphi dtheta dpsi]
 R_att = diag([0.01, 0.01, 0.01])*100;
 P.K_att = lqr(P.A_true, P.Bm, Q_att, R_att);
-% P.K_att = lqr(A, B, Q_att, R_att);   % 3x6
-
 P.MRAC.Am = P.A_true - P.Bm * P.K_att;
 P.MRAC.Bm = P.Bm * P.K_att; 
-% Q_lyap = eye(6) * 50; 
 Q_lyap = diag([100 100 100 175 175 125]);
 P.MRAC.P_lyap = lyap(P.MRAC.Am', Q_lyap);
-
 % Gains & Bounds
 P.MRAC.Gam_x = 5.0; P.MRAC.Gam_r = 5.0; P.MRAC.Gam_w = 5.0; 
 P.MRAC.theta_x_max = 100.0; P.MRAC.theta_r_max = 100.0; P.MRAC.theta_w_max = 100.0;
-
 % --- L1 Adaptive Defaults ---
 P.Ts = 0.002;              
 P.Ae = -10.0 * eye(6);      
@@ -64,7 +47,6 @@ update_L1 = @(p) struct('Phi_inv', inv((expm(p.Ae*p.Ts) - eye(6))/p.Ae), 'Exp_Ae
 L1_Mats = update_L1(P);
 P.Phi_inv = L1_Mats.Phi_inv;
 P.Exp_AeTs = L1_Mats.Exp_AeTs;
-
 fprintf('Parameters Loaded.\n');
 fprintf('--------------------------------------------------\n');
 fprintf('SELECT EXPERIMENT:\n');
@@ -73,12 +55,11 @@ fprintf('  2. Tracking Performance (Step/Sine: LQR vs L1 vs MRAC)\n');
 fprintf('  3. Effect of Sampling Time (Ts Sweep)\n');
 fprintf('  4. Robustness to Time Delay (Delay Sweep)\n');
 fprintf('  5. MRAC Tuning Mode (Conservative vs Aggressive)\n');
+fprintf('  6. MRAC Gain Sweep (RMSE vs Gamma)\n');
 fprintf('--------------------------------------------------\n');
-choice = input('Enter choice (1-5): ');
+choice = input('Enter choice (1-6): ');
 if isempty(choice), choice = 1; end
-
 %% ================= 2. EXPERIMENT LOGIC =================
-
 switch choice
     case 1 % --- EXP 1: DISTURBANCE REJECTION (3-Way) ---
         fprintf('Running Exp 1: Disturbance Rejection Comparison...\n');
@@ -100,11 +81,10 @@ switch choice
         res_mrac = run_sim(model_name, T_final, P_run);
         
         plot_3way_comparison(res_lqr, res_l1, res_mrac, '');
-
     case 2 % --- EXP 2: TRACKING PERFORMANCE (3-Way x 3 Refs) ---
         fprintf('Running Exp 2: Tracking Performance (Single Figure)...\n');
         
-        % Define Test Cases (New Case 2 Added)
+        % Define Test Cases
         cases(1).type=0; cases(1).amp=deg2rad(10); cases(1).start=0; cases(1).name='Step 10 deg';
         cases(2).type=0; cases(2).amp=deg2rad(40); cases(2).start=0; cases(2).name='Step 40 deg';
         cases(3).type=1; cases(3).amp=deg2rad(30); cases(3).start=0; cases(3).name='Sine Wave'; 
@@ -162,7 +142,6 @@ switch choice
             if i==1, ylabel('$\tau$ (Nm)', 'Interpreter', 'latex'); end
             xlabel('Time (s)', 'Interpreter', 'latex');
         end
-
     case 3 % --- Ts Sweep ---
         fprintf('Running Ts Sweep...\n');
         Ts_vals = [5e-5, 0.0001, 0.0005, 0.001, 0.002, 0.005, 0.01, 0.1, 1.0];
@@ -180,11 +159,13 @@ switch choice
         figure('Color','w','Position',[100 100 800 600]);
         semilogx(Ts_vals, rmse_log, '-o', 'LineWidth', 2, 'Color', [0.49 0.18 0.56], 'MarkerFaceColor', [0.49 0.18 0.56]); 
         set(gca, 'XDir', 'reverse', 'TickLabelInterpreter', 'latex', 'FontSize', 12);
-        xlabel('Sampling Time $T_s$ (s)', 'Interpreter', 'latex'); 
+        xlabel('Sampling Time $T_s$ (s) (Log Scale)', 'Interpreter', 'latex'); 
         ylabel('RMSE (deg)', 'Interpreter', 'latex'); 
-        title('Effect of $T_s$', 'Interpreter', 'latex');
+        % title('Effect of $T_s$', 'Interpreter', 'latex');
+        % ylabel('RMSE (deg)', 'Interpreter', 'latex');
+        % title('MRAC Performance: RMSE vs Adaptation Gain', 'Interpreter', 'latex');
+        subtitle('Tracking 30 deg Step', 'Interpreter', 'latex');
         grid on;
-
     case 4 % --- Delay Sweep ---
         fprintf('Running Delay Sweep...\n');
         delays = [0, 0.002, 0.004, 0.006, 0.008, 0.010];
@@ -205,7 +186,6 @@ switch choice
         ylabel('RMSE (deg)', 'Interpreter', 'latex'); 
         title('Time Delay Robustness', 'Interpreter', 'latex');
         grid on;
-
     case 5 % --- MRAC Tuning ---
         fprintf('MRAC Tuning Mode:\n  1: Conservative\n  2: Aggressive\n');
         if input('Choice: ') == 2
@@ -222,10 +202,58 @@ switch choice
         P_m=P; P_m.use_mrac=1; assignin('base','P',P_m);
         r_m = run_sim(model_name, T_final, P_m);
         plot_3way_comparison([], r_l1, r_m, 'MRAC Tuning Check');
+    case 6 % --- MRAC Gain Sweep (RMSE vs Gamma) ---
+        fprintf('Running MRAC Gain Sweep (RMSE vs Gamma)...\n');
+        
+        % Sweep range for Gamma
+        gam_vals = [0.01, 0.1, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 2000, 10000];
+        rmse_log = [];
+        
+        % Experiment Setup: Step Reference 30 deg
+        P.ref_type = 0; % Step
+        P.ref_amp  = deg2rad(30);
+        P.ref_start = 0.0;
+        P.use_mrac = 1; % Force MRAC Mode
+        
+        % Relax bounds for high gain testing
+        P.MRAC.theta_x_max = 2000; P.MRAC.theta_r_max = 2000; P.MRAC.theta_w_max = 2000;
+        
+        for i = 1:length(gam_vals)
+            g = gam_vals(i);
+            % Set all Gammas equal
+            P.MRAC.Gam_x = g; 
+            P.MRAC.Gam_r = g; 
+            P.MRAC.Gam_w = g;
+            
+            assignin('base', 'P', P);
+            res = run_sim(model_name, T_final, P);
+            
+            if isempty(res)
+                val = NaN; % Crashed
+            else
+                % Calculate RMSE
+                err = res.ref(:,1) - res.x(:,1);
+                val = rad2deg(sqrt(mean(err.^2)));
+            end
+            
+            % Filter out massive instabilities
+            if val > 1000, val = NaN; end
+            
+            rmse_log(i) = val;
+            fprintf('Gamma=%.1f, RMSE=%.4f deg\n', g, val);
+        end
+        
+        % Plot Results
+        figure('Color','w','Position',[100 100 800 600]);
+        semilogx(gam_vals, rmse_log, '-sq', 'LineWidth', 2, 'Color', [0.49 0.18 0.56], 'MarkerFaceColor', [0.49 0.18 0.56]);
+        set(gca, 'TickLabelInterpreter', 'latex', 'FontSize', 12);
+        xlabel('Adaptation Gain $\Gamma$ (Log Scale)', 'Interpreter', 'latex');
+        ylabel('RMSE (deg)', 'Interpreter', 'latex');
+        % title('MRAC Performance: RMSE vs Adaptation Gain', 'Interpreter', 'latex');
+        subtitle('Tracking 30 deg Step', 'Interpreter', 'latex');
+        grid on;
 end
-
 %% ================= 3. HELPER FUNCTIONS =================
-
 function res = run_sim(model, T, P_struct)
     try
         out = sim(model, 'StopTime', num2str(T));
@@ -235,7 +263,6 @@ function res = run_sim(model, T, P_struct)
         res = [];
     end
 end
-
 function res = extract_sim_data(out, P)
     function d_fix = fix_d(d, t)
         d = squeeze(d);
@@ -268,71 +295,19 @@ function res = extract_sim_data(out, P)
         res = [];
     end
 end
-
-% function plot_3way_comparison(r1, r2, r3, title_str)
-%     % r1=LQR, r2=L1, r3=MRAC
-% 
-%     % Standard Landscape Figure
-%     fig_size = [100, 100, 1000, 800];
-%     figure('Color','w', 'Position', fig_size);
-% 
-%     % Colors
-%     cLQR  = [0.4 0.4 0.4];    % Grey
-%     cL1   = [0.85 0.33 0.10]; % Orange
-%     cMRAC = [0 0.45 0.74];    % Blue
-% 
-%     % --- 1. Tracking ---
-%     subplot(2,1,1); hold on; grid on;
-%     if ~isempty(r1), plot(r1.t, rad2deg(r1.x(:,1)), '--', 'Color', cLQR, 'LineWidth', 1.5, 'DisplayName', 'LQR'); end
-%     if ~isempty(r2), plot(r2.t, rad2deg(r2.x(:,1)), '-.', 'Color', cL1, 'LineWidth', 2, 'DisplayName', 'L1+LQR'); end
-%     if ~isempty(r3), plot(r3.t, rad2deg(r3.x(:,1)), '-', 'Color', cMRAC, 'LineWidth', 2, 'DisplayName', 'MRAC'); end
-% 
-%     % Ref
-%     if ~isempty(r1), plot(r1.t, rad2deg(r1.ref(:,1)), 'k:', 'LineWidth', 1.5, 'DisplayName', 'Ref'); 
-%     elseif ~isempty(r2), plot(r2.t, rad2deg(r2.ref(:,1)), 'k:', 'LineWidth', 1.5, 'DisplayName', 'Ref'); end
-% 
-%     ylabel('$\phi$ (deg)', 'Interpreter', 'latex', 'FontSize', 12);
-%     title(title_str, 'Interpreter', 'latex', 'FontSize', 14);
-%     legend('Location','best', 'Interpreter', 'latex');
-% 
-%     % --- 2. Torque ---
-%     subplot(2,2,1); hold on; grid on;
-%     if ~isempty(r1), plot(r1.t, r1.tau_tot(:,1), '--', 'Color', cLQR, 'LineWidth', 1.5); end
-%     if ~isempty(r2), plot(r2.t, r2.tau_tot(:,1), '-.', 'Color', cL1, 'LineWidth', 2); end
-%     if ~isempty(r3), plot(r3.t, r3.tau_tot(:,1), '-', 'Color', cMRAC, 'LineWidth', 2); end
-%     if ~isempty(r1), plot(r1.t, r1.dist(:,1), 'm:', 'LineWidth', 1, 'DisplayName', 'Dist'); end
-% 
-%     ylabel('$\tau$ (Nm)', 'Interpreter', 'latex', 'FontSize', 12);
-%     title('Control Effort', 'Interpreter', 'latex', 'FontSize', 14);
-% 
-%     % % --- 3. Error ---
-%     % subplot(3,1,3); hold on; grid on;
-%     % if ~isempty(r1), plot(r1.t, rad2deg(abs(r1.ref(:,1)-r1.x(:,1))), '--', 'Color', cLQR, 'LineWidth', 1.5); end
-%     % if ~isempty(r2), plot(r2.t, rad2deg(abs(r2.ref(:,1)-r2.x(:,1))), '-.', 'Color', cL1, 'LineWidth', 2); end
-%     % if ~isempty(r3), plot(r3.t, rad2deg(abs(r3.ref(:,1)-r3.x(:,1))), '-', 'Color', cMRAC, 'LineWidth', 2); end
-%     % 
-%     % ylabel('$|e|$ (deg)', 'Interpreter', 'latex', 'FontSize', 12);
-%     % xlabel('Time (s)', 'Interpreter', 'latex', 'FontSize', 12);
-%     % title('Tracking Error', 'Interpreter', 'latex', 'FontSize', 14);
-% end
 function plot_3way_comparison(r1, r2, r3, title_str)
     % r1=LQR, r2=L1, r3=MRAC
-
     % Define figure size: wider but balanced
     fig_size = [100, 100, 1100, 450];
     figure('Color','w', 'Position', fig_size);
-
     % Create a 1x2 tiled layout
     tl = tiledlayout(1,2, 'TileSpacing', 'compact', 'Padding', 'compact');
     title(tl, title_str, 'Interpreter','latex', 'FontSize',16);
-
     % Colors for plots
     cLQR  = [0.4 0.4 0.4];    % Grey
     cL1   = [0.85 0.33 0.10]; % Orange
     cMRAC = [0 0.45 0.74];    % Blue
     % cMRAC = [0 0.7 0];        % Green
-
-
     % --- Left: Tracking (angles) ---
     nexttile(1); hold on; grid on;
     if ~isempty(r1), plot(r1.t, rad2deg(r1.x(:,1)), '--', 'Color', cLQR, 'LineWidth', 1.5, 'DisplayName', 'LQR'); end
@@ -340,19 +315,16 @@ function plot_3way_comparison(r1, r2, r3, title_str)
     if ~isempty(r3), plot(r3.t, rad2deg(r3.x(:,1)), '-', 'Color', cMRAC, 'LineWidth', 2, 'DisplayName', 'MRAC'); end
     % Reference line
     if ~isempty(r1), plot(r1.t, rad2deg(r1.ref(:,1)), 'k:', 'LineWidth', 1.5, 'DisplayName', 'Ref'); end
-
     ylabel('$\phi$ (deg)', 'Interpreter','latex', 'FontSize', 12);
     xlabel('Time (s)', 'Interpreter','latex', 'FontSize', 12);
     title('Tracking Angle', 'Interpreter','latex', 'FontSize', 14);
     legend('Location','best', 'Interpreter','latex');
-
     % --- Right: Control Effort ---
     nexttile(2); hold on; grid on;
     if ~isempty(r1), plot(r1.t, r1.tau_tot(:,1), '--', 'Color', cLQR, 'LineWidth', 1.5, 'DisplayName', 'LQR'); end
     if ~isempty(r2), plot(r2.t, r2.tau_tot(:,1), '-.', 'Color', cL1, 'LineWidth', 2, 'DisplayName', 'L1+LQR'); end
     if ~isempty(r3), plot(r3.t, r3.tau_tot(:,1), '-', 'Color', cMRAC, 'LineWidth', 2, 'DisplayName', 'MRAC'); end
     if ~isempty(r1), plot(r1.t, r1.dist(:,1), 'm:', 'LineWidth', 1, 'DisplayName', 'Dist'); end
-
     ylabel('$\tau$ (Nm)', 'Interpreter','latex', 'FontSize', 12);
     xlabel('Time (s)', 'Interpreter','latex', 'FontSize', 12);
     title('Control Effort', 'Interpreter','latex', 'FontSize', 14);
