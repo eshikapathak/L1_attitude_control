@@ -19,6 +19,7 @@ P.loop_delay = 1e-7;
 P.ref_amp    = deg2rad(30); 
 P.ref_start  = 0.0; 
 P.ref_type   = 0;         % 0=Step, 1=Sine
+P.ref_freq   = 1.0;       % Frequency for Sine Reference (Used in Exp 10)
 P.use_mrac   = 0;         
 % --- Disturbance ---
 P.dist_amp  = [1.0; 0.5; 0.2]; 
@@ -59,8 +60,9 @@ fprintf('  6. MRAC Gain Sweep (RMSE vs Gamma)\n');
 fprintf('  7. Filter BW Sweep (Dist Freq Variation)\n');
 fprintf('  8. Filter BW Sweep (2nd Order LPF)\n');
 fprintf('  9. Filter BW Sweep (Dist Amplitude Variation)\n');
+fprintf('  10. Filter BW Sweep (Reference Freq Variation)\n');
 fprintf('--------------------------------------------------\n');
-choice = input('Enter choice (1-9): ');
+choice = input('Enter choice (1-10): ');
 if isempty(choice), choice = 1; end
 %% ================= 2. EXPERIMENT LOGIC =================
 switch choice
@@ -275,7 +277,7 @@ switch choice
         colors = {'b', [0 0.5 0], [0.85 0.33 0.10], 'r', [0.49 0.18 0.56], [0.6 0.2 0], 'k', 'm'};
         
         figure('Color','w','Position',[100 100 800 600]); hold on; grid on;
-        title('Disturbance Rejection (Amp=1 Nm): RMSE vs Bandwidth', 'Interpreter','latex');
+        title('Disturbance Rejection (1st Order LPF): RMSE vs Bandwidth', 'Interpreter','latex');
         xlabel('Filter Bandwidth $\omega_c$ (rad/s)', 'Interpreter','latex');
         ylabel('RMSE (deg)', 'Interpreter','latex');
         set(gca, 'TickLabelInterpreter','latex', 'FontSize',12);
@@ -381,7 +383,7 @@ switch choice
         fprintf('Running Filter BW Sweep for Varying Disturbance Amplitudes (Fixed Freq)...\n');
         
         % Parameters
-        dist_amps = [0.2, 0.5, 1.0, 2.0, 4.0]; % Disturbance Amplitudes (Nm)
+        dist_amps = [0.2, 0.5, 1.0, 2.0]; % Disturbance Amplitudes (Nm)
         wc_vals   = [0.1, 1, 5, 10, 20, 30, 40, 50, 75, 100]; 
         
         % Setup: L1 Control (1st Order), Step Ref = 20 deg
@@ -395,7 +397,7 @@ switch choice
         P.dist_freq = [FIXED_FREQ; FIXED_FREQ; FIXED_FREQ];
         
         rmse_results = zeros(length(dist_amps), length(wc_vals));
-        colors = {[0.85 0.33 0.10], 'r', [0.49 0.18 0.56], [0.6 0.2 0], 'k', 'm'}; % Improved colors
+        colors = {'b', 'g', [0.85 0.33 0.10], 'r'}; % Improved colors
         
         figure('Color','w','Position',[100 100 800 600]); hold on; grid on;
         title(sprintf('Disturbance Rejection (Freq=%d rad/s): RMSE vs Bandwidth', FIXED_FREQ), 'Interpreter','latex');
@@ -427,6 +429,65 @@ switch choice
             end
             plot(wc_vals, rmse_results(i,:), '-s', 'LineWidth', 2, 'Color', colors{i}, ...
                 'MarkerFaceColor', colors{i}, 'DisplayName', sprintf('$d_{amp} = %.1f$ Nm', d_amp));
+        end
+        legend('Location','best', 'Interpreter','latex');
+
+    case 10 % --- Filter Bandwidth vs Reference Frequency ---
+        fprintf('Running Filter BW Sweep for Varying Reference Frequencies...\n');
+        fprintf('NOTE: Ensure your ReferenceGen block uses "P.ref_amp * sin(P.ref_freq * t)"!\n');
+        
+        % Parameters
+        ref_freqs = [0.2, 0.5, 1.0, 10.0, 30]; 
+        wc_vals   = [0.1, 1, 5, 10, 20, 30, 40, 50, 75, 100]; 
+        
+        % Setup
+        P.Ts = 0.002;
+        P.Ae = -10.0 * eye(6);
+        P.ref_type = 1; % Sine
+        P.ref_amp = deg2rad(30); 
+        P.ref_start = 0;
+        P.use_mrac = 0;
+        
+        % Constant Disturbance
+        % P.dist_amp = [0.5; 0.5; 0.5];
+        % P.dist_freq = [1.0; 1.0; 1.0];
+        P.dist_amp  = [1.0; 0.5; 0.2]; 
+        P.dist_freq = [2.0; 1.5; 0.5]; 
+        
+        rmse_results = zeros(length(ref_freqs), length(wc_vals));
+        colors = {'b', [0 0.5 0], [0.85 0.33 0.10], 'r', [0.49 0.18 0.56], 'k'};
+        
+        figure('Color','w','Position',[100 100 800 600]); hold on; grid on;
+        title('Tracking Performance (Sine Ref): RMSE vs Filter Bandwidth', 'Interpreter','latex');
+        xlabel('Filter Bandwidth $\omega_c$ (rad/s)', 'Interpreter','latex');
+        ylabel('RMSE (deg)', 'Interpreter','latex');
+        set(gca, 'TickLabelInterpreter','latex', 'FontSize',12);
+        
+        for i = 1:length(ref_freqs)
+            r_freq = ref_freqs(i);
+            P.ref_freq = r_freq;
+            fprintf('\n--- Testing Ref Freq: %.1f rad/s ---\n', r_freq);
+            
+            for j = 1:length(wc_vals)
+                w_c = wc_vals(j);
+                % 1st Order Filter
+                P.wc = w_c; 
+                [P.Alpf, P.Blpf, P.Clpf, P.Dlpf] = deal(-P.wc*eye(3), P.wc*eye(3), eye(3), zeros(3));
+                P.Clpf = eye(3); 
+                
+                assignin('base', 'P', P);
+                res = run_sim(model_name, T_final, P);
+                
+                if isempty(res)
+                    val = NaN; 
+                else
+                    err = res.ref(:,1) - res.x(:,1);
+                    val = rad2deg(sqrt(mean(err.^2)));
+                end
+                rmse_results(i,j) = val;
+            end
+            plot(wc_vals, rmse_results(i,:), '-o', 'LineWidth', 2, 'Color', colors{i}, ...
+                'MarkerFaceColor', colors{i}, 'DisplayName', sprintf('$Ref_{freq} = %.1f$ rad/s', r_freq));
         end
         legend('Location','best', 'Interpreter','latex');
 end
