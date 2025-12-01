@@ -56,10 +56,11 @@ fprintf('  3. Effect of Sampling Time (Ts Sweep)\n');
 fprintf('  4. Robustness to Time Delay (Delay Sweep)\n');
 fprintf('  5. MRAC Tuning Mode (Conservative vs Aggressive)\n');
 fprintf('  6. MRAC Gain Sweep (RMSE vs Gamma)\n');
-fprintf('  7. Filter BW Sweep (1st Order LPF)\n');
+fprintf('  7. Filter BW Sweep (Dist Freq Variation)\n');
 fprintf('  8. Filter BW Sweep (2nd Order LPF)\n');
+fprintf('  9. Filter BW Sweep (Dist Amplitude Variation)\n');
 fprintf('--------------------------------------------------\n');
-choice = input('Enter choice (1-8): ');
+choice = input('Enter choice (1-9): ');
 if isempty(choice), choice = 1; end
 %% ================= 2. EXPERIMENT LOGIC =================
 switch choice
@@ -259,20 +260,22 @@ switch choice
         fprintf('Running 1st Order Filter BW Sweep for Varying Disturbance Frequencies...\n');
         
         % Parameters to Sweep
-        dist_freqs = [2, 5, 10, 20, 30, 60]; 
+        dist_freqs = [0.1, 1, 2, 5, 10, 20, 30, 60]; 
         wc_vals = [0.1, 1, 5, 10, 20, 30, 40, 50, 75, 100]; 
         
-        % Setup: L1 Control, Step Reference = 0
+        % Setup: L1 Control, Step Reference = 20 deg
         P.Ts = 0.002;              
         P.Ae = -10.0 * eye(6);
-        P.ref_type = 0; P.ref_amp = deg2rad(30); P.ref_start = 0;
+        P.ref_type = 0; P.ref_amp = deg2rad(20); P.ref_start = 0;
         P.use_mrac = 0; 
         
         rmse_results = zeros(length(dist_freqs), length(wc_vals));
-        colors = {'b', 'g', [0.85 0.33 0.10], 'r', 'm', 'k'};
+        % Standard distinct colors (avoiding yellow/cyan)
+        % Blue, Green, Orange, Red, Purple, Brown, Black, Magenta
+        colors = {'b', [0 0.5 0], [0.85 0.33 0.10], 'r', [0.49 0.18 0.56], [0.6 0.2 0], 'k', 'm'};
         
         figure('Color','w','Position',[100 100 800 600]); hold on; grid on;
-        title('Disturbance Rejection (1st Order LPF): RMSE vs Bandwidth', 'Interpreter','latex');
+        title('Disturbance Rejection (Amp=1 Nm): RMSE vs Bandwidth', 'Interpreter','latex');
         xlabel('Filter Bandwidth $\omega_c$ (rad/s)', 'Interpreter','latex');
         ylabel('RMSE (deg)', 'Interpreter','latex');
         set(gca, 'TickLabelInterpreter','latex', 'FontSize',12);
@@ -280,7 +283,7 @@ switch choice
         for i = 1:length(dist_freqs)
             d_freq = dist_freqs(i);
             P.dist_freq = [d_freq; d_freq; d_freq];
-            fprintf('\n--- Testing Disturbance Freq: %d rad/s ---\n', d_freq);
+            fprintf('\n--- Testing Disturbance Freq: %g rad/s ---\n', d_freq);
             
             for j = 1:length(wc_vals)
                 w_c = wc_vals(j);
@@ -292,77 +295,140 @@ switch choice
                 assignin('base', 'P', P);
                 res = run_sim(model_name, T_final, P);
                 
-                if isempty(res), val = NaN; else, val = rad2deg(sqrt(mean((res.x(:,1) - P.ref_amp).^2))); end
+                if isempty(res)
+                    val = NaN; 
+                else
+                    val = rad2deg(sqrt(mean((res.x(:,1) - P.ref_amp).^2)));
+                end
                 rmse_results(i,j) = val;
                 fprintf('  wc=%d, RMSE=%.4f deg\n', w_c, val);
             end
             plot(wc_vals, rmse_results(i,:), '-o', 'LineWidth', 2, 'Color', colors{i}, ...
-                'MarkerFaceColor', colors{i}, 'DisplayName', sprintf('$d_{freq} = %d$ rad/s', d_freq));
+                'MarkerFaceColor', colors{i}, 'DisplayName', sprintf('$d_{freq} = %g$ rad/s', d_freq));
         end
         legend('Location','best', 'Interpreter','latex');
 
     case 8 % --- Filter Bandwidth vs Disturbance Frequency (2nd Order) ---
         fprintf('Running 2nd Order Filter BW Sweep for Varying Disturbance Frequencies...\n');
         fprintf('NOTE: This uses 6 filter states (2 per channel). Ensure L1_LPF block can handle dimensions!\n');
-        fprintf("sorry, not done yet")
-        % % Parameters to Sweep
-        % dist_freqs = [2, 5, 10, 20, 30, 60]; 
-        % wc_vals = [0.1, 1, 5, 10, 20, 30, 40, 50, 75, 100]; 
-        % 
-        % % Setup: L1 Control, Step Reference = 0
-        % P.ref_type = 0; P.ref_amp = 0; P.ref_start = 0;
-        % P.use_mrac = 0; 
-        % 
-        % rmse_results = zeros(length(dist_freqs), length(wc_vals));
-        % colors = {'b', 'g', [0.85 0.33 0.10], 'r', 'm', 'b'};
-        % 
-        % figure('Color','w','Position',[100 100 800 600]); hold on; grid on;
-        % title('Disturbance Rejection (2nd Order LPF): RMSE vs Bandwidth', 'Interpreter','latex');
-        % xlabel('Filter Bandwidth $\omega_c$ (rad/s)', 'Interpreter','latex');
-        % ylabel('RMSE (deg)', 'Interpreter','latex');
-        % set(gca, 'TickLabelInterpreter','latex', 'FontSize',12);
-        % 
-        % for i = 1:length(dist_freqs)
-        %     d_freq = dist_freqs(i);
-        %     P.dist_freq = [d_freq; d_freq; d_freq];
-        %     fprintf('\n--- Testing Disturbance Freq: %d rad/s ---\n', d_freq);
-        % 
-        %     for j = 1:length(wc_vals)
-        %         w_c = wc_vals(j);
-        % 
-        %         % 2nd Order Critically Damped Filter Construction
-        %         % C(s) = wc^2 / (s^2 + 2*wc*s + wc^2)
-        %         % State Space for 1 channel: xdot = [0 1; -wc^2 -2wc]x + [0; wc^2]u, y = [1 0]x
-        %         A_1ch = [0 1; -w_c^2 -2*w_c];
-        %         B_1ch = [0; w_c^2];
-        %         C_1ch = [1 0];
-        %         D_1ch = 0;
-        % 
-        %         % Block Diagonal for 3 channels (Roll, Pitch, Yaw)
-        %         P.Alpf = blkdiag(A_1ch, A_1ch, A_1ch); % 6x6
-        %         P.Blpf = blkdiag(B_1ch, B_1ch, B_1ch); % 6x3
-        %         P.Clpf = blkdiag(C_1ch, C_1ch, C_1ch); % 3x6
-        %         P.Dlpf = zeros(3,3);                   % 3x3
-        % 
-        %         % Store w_c for checking
-        %         P.wc = w_c; 
-        % 
-        %         assignin('base', 'P', P);
-        %         try
-        %             res = run_sim(model_name, T_final, P);
-        %             if isempty(res), val = NaN; else, val = rad2deg(sqrt(mean(res.x(:,1).^2))); end
-        %         catch ME
-        %             fprintf('  Error: %s. Check L1_LPF block output dimensions.\n', ME.message);
-        %             val = NaN;
-        %         end
-        % 
-        %         rmse_results(i,j) = val;
-        %         fprintf('  wc=%d, RMSE=%.4f deg\n', w_c, val);
-        %     end
-        %     plot(wc_vals, rmse_results(i,:), '-^', 'LineWidth', 2, 'Color', colors{i}, ...
-        %         'MarkerFaceColor', colors{i}, 'DisplayName', sprintf('$d_{freq} = %d$ rad/s', d_freq));
-        % end
-        % legend('Location','best', 'Interpreter','latex');
+        
+        % Parameters to Sweep
+        dist_freqs = [2, 5, 10, 20, 30, 60]; 
+        wc_vals = [0.1, 1, 5, 10, 20, 30, 40, 50, 75, 100]; 
+        
+        % Setup: L1 Control, Step Reference = 20 deg
+        P.Ts = 0.002;              
+        P.Ae = -10.0 * eye(6);
+        P.ref_type = 0; P.ref_amp = deg2rad(20); P.ref_start = 0;
+        P.use_mrac = 0; 
+        
+        rmse_results = zeros(length(dist_freqs), length(wc_vals));
+        colors = {'b', 'g', [0.85 0.33 0.10], 'r', 'm', 'k'};
+        
+        figure('Color','w','Position',[100 100 800 600]); hold on; grid on;
+        title('Disturbance Rejection (2nd Order LPF): RMSE vs Bandwidth', 'Interpreter','latex');
+        xlabel('Filter Bandwidth $\omega_c$ (rad/s)', 'Interpreter','latex');
+        ylabel('RMSE (deg)', 'Interpreter','latex');
+        set(gca, 'TickLabelInterpreter','latex', 'FontSize',12);
+        
+        for i = 1:length(dist_freqs)
+            d_freq = dist_freqs(i);
+            P.dist_freq = [d_freq; d_freq; d_freq];
+            fprintf('\n--- Testing Disturbance Freq: %d rad/s ---\n', d_freq);
+            
+            for j = 1:length(wc_vals)
+                w_c = wc_vals(j);
+                
+                % 2nd Order Critically Damped Filter Construction
+                % C(s) = wc^2 / (s^2 + 2*wc*s + wc^2)
+                % State Space for 1 channel: xdot = [0 1; -wc^2 -2wc]x + [0; wc^2]u, y = [1 0]x
+                A_1ch = [0 1; -w_c^2 -2*w_c];
+                B_1ch = [0; w_c^2];
+                C_1ch = [1 0];
+                D_1ch = 0;
+                
+                % Block Diagonal for 3 channels (Roll, Pitch, Yaw)
+                P.Alpf = blkdiag(A_1ch, A_1ch, A_1ch); % 6x6
+                P.Blpf = blkdiag(B_1ch, B_1ch, B_1ch); % 6x3
+                P.Clpf = blkdiag(C_1ch, C_1ch, C_1ch); % 3x6
+                P.Dlpf = zeros(3,3);                   % 3x3
+                
+                % Store w_c for checking
+                P.wc = w_c; 
+                
+                assignin('base', 'P', P);
+                try
+                    res = run_sim(model_name, T_final, P);
+                    if isempty(res)
+                        val = NaN; 
+                    else 
+                        val = rad2deg(sqrt(mean((res.x(:,1) - P.ref_amp).^2))); 
+                    end
+                catch ME
+                    fprintf('  Error: %s. Check L1_LPF block output dimensions.\n', ME.message);
+                    val = NaN;
+                end
+                
+                rmse_results(i,j) = val;
+                fprintf('  wc=%d, RMSE=%.4f deg\n', w_c, val);
+            end
+            plot(wc_vals, rmse_results(i,:), '-^', 'LineWidth', 2, 'Color', colors{i}, ...
+                'MarkerFaceColor', colors{i}, 'DisplayName', sprintf('$d_{freq} = %d$ rad/s', d_freq));
+        end
+        legend('Location','best', 'Interpreter','latex');
+
+    case 9 % --- Filter Bandwidth vs Disturbance Amplitude ---
+        fprintf('Running Filter BW Sweep for Varying Disturbance Amplitudes (Fixed Freq)...\n');
+        
+        % Parameters
+        dist_amps = [0.2, 0.5, 1.0, 2.0, 4.0]; % Disturbance Amplitudes (Nm)
+        wc_vals   = [0.1, 1, 5, 10, 20, 30, 40, 50, 75, 100]; 
+        
+        % Setup: L1 Control (1st Order), Step Ref = 20 deg
+        P.Ts = 0.002;              
+        P.Ae = -10.0 * eye(6);
+        P.ref_type = 0; P.ref_amp = deg2rad(20); P.ref_start = 0;
+        P.use_mrac = 0; 
+        
+        % Fixed Frequency for this experiment
+        FIXED_FREQ = 2.0; % rad/s
+        P.dist_freq = [FIXED_FREQ; FIXED_FREQ; FIXED_FREQ];
+        
+        rmse_results = zeros(length(dist_amps), length(wc_vals));
+        colors = {[0.85 0.33 0.10], 'r', [0.49 0.18 0.56], [0.6 0.2 0], 'k', 'm'}; % Improved colors
+        
+        figure('Color','w','Position',[100 100 800 600]); hold on; grid on;
+        title(sprintf('Disturbance Rejection (Freq=%d rad/s): RMSE vs Bandwidth', FIXED_FREQ), 'Interpreter','latex');
+        xlabel('Filter Bandwidth $\omega_c$ (rad/s)', 'Interpreter','latex');
+        ylabel('RMSE (deg)', 'Interpreter','latex');
+        set(gca, 'TickLabelInterpreter','latex', 'FontSize',12);
+        
+        for i = 1:length(dist_amps)
+            d_amp = dist_amps(i);
+            P.dist_amp = [d_amp; d_amp; d_amp];
+            fprintf('\n--- Testing Disturbance Amp: %.1f Nm ---\n', d_amp);
+            
+            for j = 1:length(wc_vals)
+                w_c = wc_vals(j);
+                % 1st Order Filter Logic
+                P.wc = w_c; 
+                [P.Alpf, P.Blpf, P.Clpf, P.Dlpf] = deal(-P.wc*eye(3), P.wc*eye(3), eye(3), zeros(3));
+                P.Clpf = eye(3); 
+                
+                assignin('base', 'P', P);
+                res = run_sim(model_name, T_final, P);
+                
+                if isempty(res)
+                    val = NaN; 
+                else
+                    val = rad2deg(sqrt(mean((res.x(:,1) - P.ref_amp).^2)));
+                end
+                rmse_results(i,j) = val;
+            end
+            plot(wc_vals, rmse_results(i,:), '-s', 'LineWidth', 2, 'Color', colors{i}, ...
+                'MarkerFaceColor', colors{i}, 'DisplayName', sprintf('$d_{amp} = %.1f$ Nm', d_amp));
+        end
+        legend('Location','best', 'Interpreter','latex');
 end
 %% ================= 3. HELPER FUNCTIONS =================
 function res = run_sim(model, T, P_struct)
