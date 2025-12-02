@@ -1,3 +1,2 @@
-init_and_plot.m is basic, nominal simulation
+master_experiments.m and l1_lqr.slx are the only two files you need
 
-master experiments has the sweeps
